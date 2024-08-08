@@ -1,4 +1,4 @@
-import Octopus from "./core/octopus";
+import Octopus from "../core/single-threaded/octopus";
 
 const redis = Octopus.getInstance();
 
