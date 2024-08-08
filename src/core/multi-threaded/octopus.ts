@@ -147,6 +147,17 @@ class Octopus extends EventEmitter {
     }
 
     /**
+     * Retrieves the number of worker threads in the pool.
+     * 
+     * @private
+     * @returns {number} The number of worker threads.
+     * @memberof Octopus
+     * */
+    public getWorkerCount(): number {
+        return this.maxWorkers;
+    }
+
+    /**
      * Sets a key-value pair in the store.
      * 
      * @param {string} key The key to set.
