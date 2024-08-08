@@ -8,7 +8,8 @@
   "private": true,
   "scripts": {
     "test": "ts-node src/index.ts",
-    "start": "ts-node src/core/octopus.ts"
+    "st": "ts-node src/core/single-threaded/octopus.ts",
+    "mt": "ts-node src/core/multi-threaded/octopus.ts"
   },
   "dependencies": {
     "@types/node": "^22.1.0",
