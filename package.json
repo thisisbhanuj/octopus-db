@@ -7,9 +7,8 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "test": "ts-node src/index.ts",
-    "st": "ts-node src/core/single-threaded/octopus.ts",
-    "mt": "ts-node src/core/multi-threaded/octopus.ts"
+    "usage:st": "ts-node src/usage/st.ts",
+    "usage:mt": "ts-node src/usage/mt.ts"
   },
   "dependencies": {
     "@types/node": "^22.1.0",
