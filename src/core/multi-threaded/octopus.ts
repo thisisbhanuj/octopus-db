@@ -77,7 +77,7 @@ class Octopus extends EventEmitter {
      */
     private initializeWorkerPool(): void {
         for (let i = 0; i < this.maxWorkers; i++) {
-            this.workerPool.push(new Worker(__filename, { workerData: null }));
+            this.workerPool.push(new Worker(__filename));
         }
     }
 
@@ -85,7 +85,7 @@ class Octopus extends EventEmitter {
      * Runs a worker thread to execute a key-value operation.
      * 
      * @private
-     * @param {WorkerData} data The operation data to send to the worker thread.
+     * @param {WorkerDataType} data The operation data to send to the worker thread.
      * @returns {Promise<any>} The result of the operation.
      * @memberof Octopus
      */
@@ -103,14 +103,14 @@ class Octopus extends EventEmitter {
 
         return new Promise((resolve, reject) => {
             worker.postMessage(data);
-        
+
             // Listen for a message from the worker thread (successful result)
             worker.once('message', (message) => {
                 this.workerPool.push(worker); // Return the worker to the pool
                 this.processQueue(); // Process the next task in the queue
                 resolve(message);
             });
-        
+
             // Listen for an error from the worker thread
             worker.once('error', (error) => {
                 console.error('Worker encountered an error:', error);
@@ -118,7 +118,7 @@ class Octopus extends EventEmitter {
                 this.processQueue(); // Process the next task in the queue
                 reject(error);
             });
-        
+
             // Ensure the worker is returned to the pool if it exits without errors
             worker.once('exit', (code) => {
                 if (code !== 0) {
@@ -146,7 +146,7 @@ class Octopus extends EventEmitter {
         }
     }
 
-     /**
+    /**
      * Sets a key-value pair in the store.
      * 
      * @param {string} key The key to set.
