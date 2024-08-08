@@ -4,13 +4,13 @@ import { WorkerDataType } from '../types/OctopusTypes';
 
 if (!isMainThread) {
     const kvStore = Octopus.getInstance(); // Reuse the singleton instance within each worker
-    const { type, key, value, seconds } = workerData as WorkerDataType;
+    const { type, key, value, seconds } = workerData ?? {} as WorkerDataType;
 
     (async () => {
         try {
             switch (type) {
                 case 'set':
-                    parentPort?.postMessage(await kvStore.set(key, value!));
+                    parentPort?.postMessage(await kvStore.set(key, value));
                     break;
                 case 'get':
                     parentPort?.postMessage(await kvStore.get(key));
@@ -28,7 +28,7 @@ if (!isMainThread) {
                     parentPort?.postMessage(await kvStore.decr(key));
                     break;
                 case 'expire':
-                    parentPort?.postMessage(await kvStore.expire(key, seconds!));
+                    parentPort?.postMessage(await kvStore.expire(key, seconds));
                     break;
                 case 'ttl':
                     parentPort?.postMessage(await kvStore.ttl(key));
