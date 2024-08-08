@@ -1,7 +1,7 @@
 {
-  "name": "briefcase",
+  "name": "octopusdb",
   "version": "1.0.0",
-  "description": "Custom Key Value Database",
+  "description": "Multi Threaded Key Value Database",
   "main": "index.js",
   "author": "bhanuj",
   "license": "MIT",
