@@ -45,3 +45,8 @@ export interface AdvancedTask<T> {
     */
    executeAt: number;
 }
+
+export interface HeapNode<T> {
+    task: T;
+    priority: number;
+}

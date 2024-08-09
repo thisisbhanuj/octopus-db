@@ -1,4 +1,5 @@
 import { AdvancedTask } from "../../../types/OctopusTypes";
+import { BinaryHeapPriorityQueue } from "./BinaryHeapPriorityQueue";
 import { OctopusMutex } from "./OctopusMutex";
 
 /**
@@ -12,10 +13,15 @@ export class AdvancedTaskQueue<T> {
     /**
      * Internal queue storing tasks with their priorities and scheduled execution times.
      * 
+     * Benefits:
+     * - Efficiency: Both enqueue and dequeue operations run in O(log n) time, making the queue scalable even with a large number of tasks.
+     * - Maintainability: The binary heap structure is simple and straightforward, making it easy to reason about and debug.
+     * - Versatility: The priority queue can be adapted for different use cases by modifying the comparison logic in the compare method (e.g., to create a max-heap).
+     * 
      * @private
-     * @type {AdvancedTask<T>[]}
+     * @type {BinaryHeapPriorityQueue<AdvancedTask<T>>}
      */
-    private queue: AdvancedTask<T>[] = [];
+    private queue: BinaryHeapPriorityQueue<AdvancedTask<T>>;
 
     /**
      * A set of task keys to ensure uniqueness and avoid duplicate tasks.
@@ -50,6 +56,7 @@ export class AdvancedTaskQueue<T> {
      * @public
      */
     constructor() {
+        this.queue = new BinaryHeapPriorityQueue<AdvancedTask<T>>();
         this.startPolling();
     }
 
@@ -66,8 +73,8 @@ export class AdvancedTaskQueue<T> {
             await this.mutex.lock();
             try {
                 const now = Date.now();
-                while (this.queue.length > 0 && this.queue[0].executeAt <= now) {
-                    const task = this.queue.shift();
+                while (this.queue.size() > 0 && this.queue.peek()?.executeAt <= now) {
+                    const task = this.queue.dequeue();
                     if (task) {
                         this.taskSet.delete(JSON.stringify(task.task));
                         console.log('Executing task:', task.task);
@@ -93,9 +100,8 @@ export class AdvancedTaskQueue<T> {
         await this.mutex.lock();
         try {
             if (!this.taskSet.has(taskKey)) {
-                this.queue.push({ task, priority, executeAt });
+                this.queue.enqueue({ task, priority, executeAt }, priority);
                 this.taskSet.add(taskKey);
-                this.queue.sort((a, b) => a.executeAt - b.executeAt || a.priority - b.priority);
             }
         } finally {
             this.mutex.unlock();
@@ -111,11 +117,13 @@ export class AdvancedTaskQueue<T> {
         await this.mutex.lock();
         try {
             const now = Date.now();
-            const task = this.queue.find(t => t.executeAt <= now);
-            if (task) {
-                this.queue = this.queue.filter(t => t !== task);
+            const task = this.queue.dequeue();
+            if (task?.executeAt <= now) {
                 this.taskSet.delete(JSON.stringify(task.task));
                 return task.task;
+            } else if (task) {
+                // If the task is not ready to execute, put it back
+                this.queue.enqueue(task, task.priority);
             }
         } finally {
             this.mutex.unlock();
@@ -129,6 +137,6 @@ export class AdvancedTaskQueue<T> {
      * @returns {number} The number of tasks in the queue.
      */
     size(): number {
-        return this.queue.length;
+        return this.queue.size();
     }
 }
