@@ -8,8 +8,8 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "usage:st": "tsc src/usage/st.ts && node src/usage/st.js",
-    "usage:mt": "tsc src/usage/mt.ts && node src/usage/mt.js",
+    "u1": "tsc src/usage/mt.ts && node src/usage/mt.js",
+    "u2": "ts-node src/usage/mt.ts",
     "test": "tsc src/tests/Octopus.test.ts",
     "jest": "jest --watch"
   },
