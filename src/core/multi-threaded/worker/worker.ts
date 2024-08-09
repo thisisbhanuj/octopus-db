@@ -22,7 +22,7 @@ if (!isMainThread) {
     //  The 'message' event is a standard event in the Node.js worker_threads module.
     //  It's used to handle incoming messages from the main thread to the worker thread.
     //  When you write parentPort!.on('message', ...), you're telling the worker to listen for messages sent from the main thread.
-    parentPort!.on('message', (data: WorkerDataType) => {
+    parentPort.on('message', (data: WorkerDataType) => {
         let result: any;
 
         switch (data.type) {
@@ -76,12 +76,12 @@ if (!isMainThread) {
             case 'expire':
                 if (store.has(data.key)) {
                     if (ttlStore.has(data.key)) {
-                        clearTimeout(ttlStore.get(data.key)!);
+                        clearTimeout(ttlStore.get(data.key));
                     }
                     ttlStore.set(data.key, setTimeout(() => {
                         store.delete(data.key);
                         ttlStore.delete(data.key);
-                    }, data.seconds! * 1000));
+                    }, data.seconds * 1000));
                     result = 1;
                 } else {
                     result = 0;
@@ -117,7 +117,7 @@ if (!isMainThread) {
 
                     case 'LPOP':
                         if (store.has(data.key) && Array.isArray(store.get(data.key))) {
-                            result = store.get(data.key).shift() || null;
+                            result = store.get(data.key).shift()!;
                         } else {
                             result = null;
                         }
@@ -125,7 +125,7 @@ if (!isMainThread) {
 
                     case 'RPOP':
                         if (store.has(data.key) && Array.isArray(store.get(data.key))) {
-                            result = store.get(data.key).pop() || null;
+                            result = store.get(data.key).pop()!;
                         } else {
                             result = null;
                         }
@@ -161,7 +161,7 @@ if (!isMainThread) {
                 break;
         }
 
-        parentPort!.postMessage(result);
+        parentPort.postMessage(result);
     });
 }
 // ****************************************************
