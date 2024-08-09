@@ -1,6 +1,7 @@
 import { Worker } from 'worker_threads';
 import { WorkerDataType, WorkerMetadata, WorkerState } from '../../../types/OctopusTypes';
 import { AdvancedTaskQueue } from '../queue/AdvancedTaskQueue';
+import { OctupusReentrantMutex } from '../queue/OctopusReentrantMutex';
 
 /**
  * WorkerPool manages a pool of worker threads and task queuing.
@@ -56,6 +57,9 @@ export class WorkerPool {
     private taskQueue: AdvancedTaskQueue<WorkerDataType>; // Replaces the simple array-based queue with AdvancedTaskQueue, allowing tasks to be enqueued with priorities and delays.
     private workerIdCounter: number = 0;
     private maxWorkers: number;
+    // This implementation supports reentrant locking, ensuring that a thread can acquire the lock multiple times without causing deadlock.
+    // Integrated into the WorkerPool to manage concurrency and avoid race conditions in worker state management and task processing.
+    private mutex = new OctupusReentrantMutex(); 
 
     /**
      * Creates an instance of the WorkerPool class.
@@ -91,7 +95,7 @@ export class WorkerPool {
         }
     }
 
-  /**
+    /**
      * Adds a worker to the worker pool.
      * 
      * @private
@@ -101,37 +105,48 @@ export class WorkerPool {
      * @returns {void}
      */
     private addWorkerToPool(workerId: number = this.workerIdCounter++, state: keyof WorkerState = 'idle'): void {
-        const worker = new Worker(__filename.replace('workerPool', 'worker'));
+        const worker = new Worker(__filename.replace('workerPool', 'worker'), {
+            workerData: { c_threadId: workerId } // Passes the workerId to the worker data as c_threadId
+        });
         this.workerPoolMap.set(workerId, {
             worker,
             metadata: { id: workerId, state }
         });
         this.availableWorkers.add(workerId);
 
-        worker.once('message', (message) => {
+        worker.once('message', async () => {
+            await this.mutex.lock();
             this.workerPoolMap.get(workerId).metadata.state = 'idle'; // Update state to idle
             this.availableWorkers.add(workerId); // Return to available workers
             this.processQueue(); // Process the next task
+            this.mutex.unlock();
         });
 
-        worker.on('error', (error) => {
+        worker.on('error', async (error) => {
             console.error('Worker encountered an error:', error);
+            await this.mutex.lock();
             this.markWorkerAsIdleOrReset(workerId);
             this.processQueue();
+            this.mutex.unlock();
         });
 
-        worker.on('exit', (code) => {
+        worker.on('exit', async (code) => {
             if (code !== 0) {
                 console.error(`Worker stopped with exit code ${code}`);
+                await this.mutex.lock();
                 this.removeWorker(workerId);
-                // Optionally recreate the worker if needed
+                // Add a new worker to the pool if the number of workers is less than the maximum
                 if (this.workerPoolMap.size < this.maxWorkers) {
                     this.addWorkerToPool();
                 }
+                await this.processQueue();
+                this.mutex.unlock();
             } else {
+                await this.mutex.lock();
                 this.markWorkerAsIdleOrReset(workerId);
+                await this.processQueue();
+                this.mutex.unlock();
             }
-            this.processQueue();
         });
     }
 
@@ -217,32 +232,43 @@ export class WorkerPool {
             worker.postMessage(data);
 
             // Listen for a message from the worker thread (successful result)
-            worker.once('message', (message) => {
+            worker.once('message', async (message) => {
                 // Return the worker to the pool, as it is now idle
+                await this.mutex.lock();
                 this.addWorkerToPool(workerId, 'idle');
                 this.processQueue(); // Process the next task in the queue
+                this.mutex.unlock();
                 resolve(message);
             });
 
-            worker.once('error', (error) => {
+            worker.once('error', async (error) => {
                 console.error('Worker encountered an error:', error);
+                await this.mutex.lock();
                 this.markWorkerAsIdleOrReset(workerId);
                 this.processQueue();
+                this.mutex.unlock();
                 reject(error);
             });
 
-            worker.once('exit', (code) => {
+            worker.once('exit', async (code) => {
                 if (code !== 0) {
                     console.error(`Worker stopped with exit code ${code}`);
+                    await this.mutex.lock();
                     this.removeWorker(workerId);
+                    if (this.workerPoolMap.size < this.maxWorkers) {
+                        this.addWorkerToPool();
+                    }
+                    await this.processQueue();
+                    this.mutex.unlock();
                 } else {
+                    await this.mutex.lock();
                     this.markWorkerAsIdleOrReset(workerId);
+                    await this.processQueue();
+                    this.mutex.unlock();
                 }
-                this.processQueue();
             });
         });
     }
-
 
     /**
      * Processes the next task in the queue, if available.
@@ -263,5 +289,4 @@ export class WorkerPool {
             }
         }
     }
-
 }
