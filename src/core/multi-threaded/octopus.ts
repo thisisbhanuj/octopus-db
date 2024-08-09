@@ -1,6 +1,5 @@
 import { EventEmitter } from 'events';
-import { Worker } from 'worker_threads';
-import { WorkerDataType } from '../../types/OctopusTypes';
+import { WorkerPool } from './worker/workerPool';
 
 /**
  * Octopus is a singleton key-value store with support for time-to-live (TTL) on keys.
@@ -34,8 +33,7 @@ import { WorkerDataType } from '../../types/OctopusTypes';
  */
 class Octopus extends EventEmitter {
     private static instance: Octopus;
-    private workerPool: Worker[];
-    private taskQueue: Array<(worker: Worker) => void>;
+    private workerPool: WorkerPool;
     private maxWorkers: number;
     private static readonly defaultNumWorkers: number = 8;
 
@@ -48,10 +46,8 @@ class Octopus extends EventEmitter {
      */
     private constructor(maxWorkers?: number) {
         super();
-        this.maxWorkers = maxWorkers! > 0 ? maxWorkers! : Octopus.defaultNumWorkers;
-        this.workerPool = [];
-        this.taskQueue = [];
-        this.initializeWorkerPool();
+        this.maxWorkers = maxWorkers > 0 ? maxWorkers : Octopus.defaultNumWorkers;
+        this.workerPool = new WorkerPool(maxWorkers);
     }
 
     /**
@@ -70,84 +66,7 @@ class Octopus extends EventEmitter {
     }
 
     /**
-     * Initializes the worker pool with the maximum number of worker threads.
-     * 
-     * @private
-     * @memberof Octopus
-     */
-    private initializeWorkerPool(): void {
-        for (let i = 0; i < this.maxWorkers; i++) {
-            this.workerPool.push(new Worker(__filename));
-        }
-    }
-
-    /**
-     * Runs a worker thread to execute a key-value operation.
-     * 
-     * @private
-     * @param {WorkerDataType} data The operation data to send to the worker thread.
-     * @returns {Promise<any>} The result of the operation.
-     * @memberof Octopus
-     */
-    private async runWorker(data: WorkerDataType): Promise<any> {
-        const worker = this.workerPool.shift(); // Get a worker from the pool
-
-        if (!worker) {
-            // No available workers, add the task to the queue
-            return new Promise((resolve, reject) => {
-                this.taskQueue.push(() => {
-                    this.runWorker(data).then(resolve).catch(reject);
-                });
-            });
-        }
-
-        return new Promise((resolve, reject) => {
-            worker.postMessage(data);
-
-            // Listen for a message from the worker thread (successful result)
-            worker.once('message', (message) => {
-                this.workerPool.push(worker); // Return the worker to the pool
-                this.processQueue(); // Process the next task in the queue
-                resolve(message);
-            });
-
-            // Listen for an error from the worker thread
-            worker.once('error', (error) => {
-                console.error('Worker encountered an error:', error);
-                this.workerPool.push(worker); // Return the worker to the pool even on error
-                this.processQueue(); // Process the next task in the queue
-                reject(error);
-            });
-
-            // Ensure the worker is returned to the pool if it exits without errors
-            worker.once('exit', (code) => {
-                if (code !== 0) {
-                    console.error(`Worker stopped with exit code ${code}`);
-                }
-                this.workerPool.push(worker); // Return the worker to the pool
-                this.processQueue(); // Process the next task in the queue
-            });
-        });
-    }
-
-    /**
-     * Processes the next task in the queue, if available.
-     * 
-     * @private
-     * @memberof Octopus
-     * @returns {void}
-     */
-    private processQueue(): void {
-        if (this.taskQueue.length > 0) {
-            const task = this.taskQueue.shift();
-            if (task) {
-                task(this.workerPool[0]); // Execute the next task
-            }
-        }
-    }
-
-    /**
-     * Retrieves the number of worker threads in the pool.
+     * Retrieves the number     of worker threads in the pool.
      * 
      * @private
      * @returns {number} The number of worker threads.
@@ -166,7 +85,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async set(key: string, value: string): Promise<string> {
-        const result = await this.runWorker({ type: 'set', key, value });
+        const result = await this.workerPool.runWorker({ type: 'set', key, value });
         this.emit('operation', 'set', key, value);
         return result;
     }
@@ -179,7 +98,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async get(key: string): Promise<string | null> {
-        const result = await this.runWorker({ type: 'get', key });
+        const result = await this.workerPool.runWorker({ type: 'get', key });
         this.emit('operation', 'get', key);
         return result;
     }
@@ -192,7 +111,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async del(key: string): Promise<number> {
-        const result = await this.runWorker({ type: 'del', key });
+        const result = await this.workerPool.runWorker({ type: 'del', key });
         this.emit('operation', 'del', key);
         return result;
     }
@@ -205,7 +124,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async exists(key: string): Promise<number> {
-        const result = await this.runWorker({ type: 'exists', key });
+        const result = await this.workerPool.runWorker({ type: 'exists', key });
         this.emit('operation', 'exists', key);
         return result;
     }
@@ -218,7 +137,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async incr(key: string): Promise<string> {
-        const result = await this.runWorker({ type: 'incr', key });
+        const result = await this.workerPool.runWorker({ type: 'incr', key });
         this.emit('operation', 'incr', key);
         return result;
     }
@@ -231,7 +150,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async decr(key: string): Promise<string> {
-        const result = await this.runWorker({ type: 'decr', key });
+        const result = await this.workerPool.runWorker({ type: 'decr', key });
         this.emit('operation', 'decr', key);
         return result;
     }
@@ -245,7 +164,7 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async expire(key: string, seconds: number): Promise<number> {
-        const result = await this.runWorker({ type: 'expire', key, seconds });
+        const result = await this.workerPool.runWorker({ type: 'expire', key, seconds });
         this.emit('operation', 'expire', key);
         return result;
     }
@@ -258,10 +177,119 @@ class Octopus extends EventEmitter {
      * @memberof Octopus
      */
     public async ttl(key: string): Promise<number> {
-        const result = await this.runWorker({ type: 'ttl', key });
+        const result = await this.workerPool.runWorker({ type: 'ttl', key });
         this.emit('operation', 'ttl', key);
         return result;
     }
+
+    /**
+     * Removes the time-to-live (TTL) from a key, making it persistent.
+     * 
+     * @param {string} key The key to persist.
+     * @returns {Promise<number>} 1 if the key was persisted, 0 if the key does not exist.
+     * @memberof Octopus
+     */
+    public async persist(key: string): Promise<number> {
+        const result = await this.workerPool.runWorker({ type: 'persist', key });
+        this.emit('operation', 'persist', key);
+        return result;
+    }
+
+    /**
+     * Performs a left push operation on a list.
+     * 
+     * @param {string} key The key of the list.
+     * @param {string} value The value to push.
+     * @returns {Promise<number>} The new length of the list.
+     * @memberof Octopus
+     */
+    public async lpush(key: string, value: string): Promise<number> {
+        const result = await this.workerPool.runWorker({ type: 'listOp', key, subType: 'LPUSH', value });
+        this.emit('operation', 'lpush', key, value);
+        return result;
+    }
+
+    /**
+     * Performs a right push operation on a list.
+     * 
+     * @param {string} key The key of the list.
+     * @param {string} value The value to push.
+     * @returns {Promise<number>} The new length of the list.
+     * @memberof Octopus
+     */
+    public async rpush(key: string, value: string): Promise<number> {
+        const result = await this.workerPool.runWorker({ type: 'listOp', key, subType: 'RPUSH', value });
+        this.emit('operation', 'rpush', key, value);
+        return result;
+    }
+
+    /**
+     * Performs a left pop operation on a list.
+     * 
+     * @param {string} key The key of the list.
+     * @returns {Promise<string | null>} The value popped from the list, or null if the list is empty.
+     * @memberof Octopus
+     */
+    public async lpop(key: string): Promise<string | null> {
+        const result = await this.workerPool.runWorker({ type: 'listOp', key, subType: 'LPOP' });
+        this.emit('operation', 'lpop', key);
+        return result;
+    }
+
+    /**
+     * Performs a right pop operation on a list.
+     * 
+     * @param {string} key The key of the list.
+     * @returns {Promise<string | null>} The value popped from the list, or null if the list is empty.
+     * @memberof Octopus
+     */
+    public async rpop(key: string): Promise<string | null> {
+        const result = await this.workerPool.runWorker({ type: 'listOp', key, subType: 'RPOP' });
+        this.emit('operation', 'rpop', key);
+        return result;
+    }
+
+    /**
+     * Adds a value to a set.
+     * 
+     * @param {string} key The key of the set.
+     * @param {string} value The value to add.
+     * @returns {Promise<number>} The number of elements added to the set.
+     * @memberof Octopus
+     */
+    public async sadd(key: string, value: string): Promise<number> {
+        const result = await this.workerPool.runWorker({ type: 'setOp', key, subType: 'SADD', value });
+        this.emit('operation', 'sadd', key, value);
+        return result;
+    }
+
+    /**
+     * Removes a value from a set.
+     * 
+     * @param {string} key The key of the set.
+     * @param {string} value The value to remove.
+     * @returns {Promise<number>} The number of elements removed from the set.
+     * @memberof Octopus
+     */
+    public async srem(key: string, value: string): Promise<number> {
+        const result = await this.workerPool.runWorker({ type: 'setOp', key, subType: 'SREM', value });
+        this.emit('operation', 'srem', key, value);
+        return result;
+    }
+
+    /**
+     * Retrieves all members of a set.
+     * 
+     * @param {string} key The key of the set.
+     * @returns {Promise<string[]>} An array of all members in the set.
+     * @memberof Octopus
+     */
+    public async smembers(key: string): Promise<string[]> {
+        const result = await this.workerPool.runWorker({ type: 'setOp', key, subType: 'SMEMBERS' });
+        this.emit('operation', 'smembers', key);
+        return result;
+    }
 }
+
 
 export default Octopus;
