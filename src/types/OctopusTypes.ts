@@ -16,3 +16,32 @@ export interface WorkerState {
     busy: 'busy';
     terminated: 'terminated';
 }
+
+/**
+* Interface representing an advanced task with priority and a scheduled execution time.
+* 
+* @interface AdvancedTask
+* @template T
+*/
+export interface AdvancedTask<T> {
+   /**
+    * The task to be executed.
+    * 
+    * @type {T}
+    */
+   task: T;
+
+   /**
+    * The priority of the task, used for sorting tasks with the same execution time.
+    * 
+    * @type {number}
+    */
+   priority: number;
+
+   /**
+    * The Unix timestamp (in milliseconds) at which the task should be executed.
+    * 
+    * @type {number}
+    */
+   executeAt: number;
+}

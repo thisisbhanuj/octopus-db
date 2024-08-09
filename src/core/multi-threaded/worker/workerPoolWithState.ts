@@ -1,17 +1,59 @@
 import { Worker } from 'worker_threads';
 import { WorkerDataType, WorkerMetadata, WorkerState } from '../../../types/OctopusTypes';
+import { AdvancedTaskQueue } from '../queue/AdvancedTaskQueue';
 
 /**
- * WorkerPool Manages worker pooling and task queuing.
- */
+ * WorkerPool manages a pool of worker threads and task queuing.
+ * 
+ * This class integrates `AdvancedTaskQueue` to efficiently manage worker threads and their tasks.
+ * It handles worker lifecycle, task queuing, and task processing with support for priorities and delays.
+ *
+ * ### Key Integrations and Concepts:
+ *
+ * 1. **AdvancedTaskQueue Integration**:
+ *    - Uses `AdvancedTaskQueue` for advanced task management with priorities and delays.
+ *    - Handles asynchronous task dequeuing.
+ *
+ * 2. **Worker Pool Management**:
+ *    - Uses a `Map` to manage workers with their states.
+ *    - Tracks available workers with a `Set`.
+ *    - Manages worker states (`idle`, `busy`, `terminated`).
+ *
+ * 3. **Task Execution**:
+ *    - The `runWorker` method executes tasks, considering priority and delay.
+ *    - Handles worker errors and exits to maintain stability.
+ *
+ * 4. **Queue Processing**:
+ *    - `processQueue` picks and assigns tasks to available workers based on priority and delay.
+ *
+ * ### Integration Process
+ *
+ * 1. **Initialization**:
+ *    - Instantiates worker threads up to `maxWorkers`.
+ *
+ * 2. **Task Enqueuing**:
+ *    - Enqueues tasks if no workers are available, based on priority and delay.
+ *
+ * 3. **Task Dequeuing and Execution**:
+ *    - Processes tasks when workers are available.
+ *
+ * 4. **Worker State Management**:
+ *    - Updates worker states and manages errors and exits.
+ *
+ * ### Benefits
+ *
+ * - **Scalability**: Efficiently handles a large number of tasks and workers.
+ * - **Resilience**: Gracefully handles worker failures.
+ * - **Flexibility**: Supports advanced queuing features for various use cases.
+ **/
 export class WorkerPool {
     // Why Map?
     // Tracking: Easily track and manage workers by their unique identifiers.
     // State Management: You can track worker states (active, idle, etc.) or additional metadata.
     // Dynamic Management: Add or remove workers dynamically based on their state or other criteria.
-    private workerPoolMap: Map<number,  { worker: Worker; metadata: WorkerMetadata }> = new Map();
+    private workerPoolMap: Map<number, { worker: Worker; metadata: WorkerMetadata }> = new Map();
     private availableWorkers: Set<number> = new Set();
-    private taskQueue: Array<(worker: Worker) => void> = [];
+    private taskQueue: AdvancedTaskQueue<WorkerDataType>; // Replaces the simple array-based queue with AdvancedTaskQueue, allowing tasks to be enqueued with priorities and delays.
     private workerIdCounter: number = 0;
     private maxWorkers: number;
 
@@ -26,6 +68,7 @@ export class WorkerPool {
      * */
     constructor(maxWorkers: number) {
         this.maxWorkers = maxWorkers;
+        this.taskQueue = new AdvancedTaskQueue<WorkerDataType>();
         this.initializeWorkerPool();
     }
 
@@ -132,15 +175,24 @@ export class WorkerPool {
      * The runWorker method constructs a WorkerDataType object containing the 
      * operation type (type) and any other relevant data (e.g., key, value, etc.).
      * 
+     * @example :
+     *  const pool = new WorkerPool(4);
+     *  // Normal task
+     *  pool.runWorker({ type: 'set', key: 'a', value: 1 });
+     *  // High priority task
+     *  pool.runWorker({ type: 'get', key: 'a' }, 10);
+     *  // Delayed task (execute after 5 seconds)
+     *  pool.runWorker({ type: 'delete', key: 'a' }, 0, 5000);
+     * 
      * @param {WorkerDataType} data The operation data to send to the worker thread.
      * @returns {Promise<any>} The result of the operation.
      * @memberof Octopus
      */
-    async runWorker(data: WorkerDataType): Promise<any> {
+    async runWorker(data: WorkerDataType, priority: number = 0, delay: number = 0): Promise<any> {
         if(this.availableWorkers.size === 0) {
             return new Promise((resolve, reject) => {
-                this.taskQueue.push(() => {
-                    this.runWorker(data).then(resolve).catch(reject);
+                this.taskQueue.enqueue(data, priority, delay).then(() => {
+                    this.processQueue();
                 });
             });
         }
@@ -199,14 +251,14 @@ export class WorkerPool {
      * @memberof WorkerPool
      * @returns {void}
      */
-    private processQueue(): void {
-        if (this.taskQueue.length > 0 && this.availableWorkers.size > 0) {
-            const task = this.taskQueue.shift();
+    private async processQueue(): Promise<void> {
+        if (this.taskQueue.size() > 0 && this.availableWorkers.size > 0) {
+            const task = await this.taskQueue.dequeue();
             if (task) {
                 const workerId = Array.from(this.availableWorkers.values()).shift();
                 const workerEntry = workerId ? this.workerPoolMap.get(workerId) : undefined;
                 if (workerEntry && workerEntry.metadata.state === 'idle') {
-                    task(workerEntry.worker);
+                    this.runWorker(task);
                 }
             }
         }
