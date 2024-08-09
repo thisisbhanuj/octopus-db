@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { WorkerPool } from './worker/workerPool';
+import { WorkerPool } from './worker/workerPoolWithState';
 
 /**
  * Octopus is a singleton key-value store with support for time-to-live (TTL) on keys.
