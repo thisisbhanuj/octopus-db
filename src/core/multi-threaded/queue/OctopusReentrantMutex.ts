@@ -79,6 +79,6 @@ export class OctupusReentrantMutex {
      * @returns {number} The current thread ID.
      */
     private getCurrentThreadId(): number {
-        return workerData.c_threadId ?? 0; // addWorkerToPool() adds a c_threadId property to workerData
+        return workerData?.c_threadId ?? 0; // addWorkerToPool() adds a c_threadId property to workerData
     }
 }
