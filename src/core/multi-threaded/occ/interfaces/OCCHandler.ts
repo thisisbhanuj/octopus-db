@@ -52,5 +52,6 @@ export class OCCHandler<T extends VersionedData> {
         if (data) {
             data.version += 1;
         }
+        console.log('Data version incremented:', data);
     }
 }
