@@ -1,8 +1,26 @@
 import { VersionedData } from "./VersionedData";
 
+/**
+ * An Optimistic Concurrency Control (OCC) handler for managing versioned data.
+ * 
+ * In the context of Optimistic Concurrency Control (OCC), 
+ * the traditional concept of transactions, such as start, commit, and rollback, 
+ * is replaced by version validation and conflict handling. 
+ * 
+ * Key Differences Between OCC and Traditional Transactions
+ * - Version Validation:
+ * OCC primarily focuses on validating that the version of the data hasn't changed since it was read. This ensures that the data hasn't been modified by other transactions. If the version is out-of-date, the operation is aborted and typically retried, often with a conflict resolution strategy.
+ * - Transaction-Like Behavior in OCC: 
+ * While OCC does not explicitly use start, commit, and rollback, you can still implement these concepts to manage complex operations or multi-step processes where atomicity is required.
+ */
 export class OCCHandler<T extends VersionedData> {
     private dataStore: Map<number, T> = new Map();
 
+    // getData is a method that's passed in through the constructor of the OCCHandler class, 
+    // and it's expected to be provided by the class that instantiates OCCHandler.
+    // The idea is that the OCCHandler doesn't directly manage the data itself; instead, 
+    // it relies on the getData method provided to it to fetch the data. 
+    // This method is necessary to perform operations and version control on that data.
     constructor(private getData: (id: number) => T) {}
 
     /**
@@ -26,6 +44,7 @@ export class OCCHandler<T extends VersionedData> {
      * @throws {Error} If the version is invalid or if the operation fails.
      */
     async performOperation(workerId: number, expectedVersion: number, operation: (data: T) => Promise<void>): Promise<void> {
+        // Validate the version of the data before performing the operation.
         if (!this.validateVersion(workerId, expectedVersion)) {
             console.error('Conflict detected: data has been modified');
             Promise.reject(new Error('Conflict detected: data has been modified'));
