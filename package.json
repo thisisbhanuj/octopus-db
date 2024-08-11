@@ -1,6 +1,5 @@
 {
   "name": "octopusdb",
-  "type": "module",
   "version": "1.0.0",
   "description": "Multi Threaded Key Value Database",
   "author": "bhanuj",
@@ -8,8 +7,8 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "u1": "tsc src/usage/mt.ts && node src/usage/mt.js",
-    "u2": "ts-node src/usage/mt.ts",
+    "use:tsc": "tsc src/usage/mt.ts && node src/usage/mt.js",
+    "use:tsnode": "ts-node src/usage/mt.ts",
     "test": "tsc src/tests/Octopus.test.ts",
     "jest": "jest --watch"
   },
@@ -22,7 +21,6 @@
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
     "@babel/preset-typescript": "^7.24.7",
-    "@babel/plugin-transform-modules-commonjs": "^7.24.8",
     "@types/jest": "^29.5.12",
     "babel-jest": "^29.7.0",
     "jest": "^29.7.0",
