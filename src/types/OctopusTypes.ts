@@ -6,9 +6,19 @@ export type WorkerDataType = {
     seconds?: number;
 };
 
+/**
+ * Interface representing a worker metadata object.
+ * 
+ * @interface WorkerMetadata
+ * @template T
+ * @property {number} id Worker ID
+ * @property {keyof WorkerState} state Worker state
+ * @property {number} version Optmistic concurrency control version
+ */
 export interface WorkerMetadata {
-    id: number;
-    state: keyof WorkerState;
+    id: number; // Worker ID
+    state: keyof WorkerState; // Worker state
+    version: number; // Optmistic concurrency control version
 }
 
 export interface WorkerState {

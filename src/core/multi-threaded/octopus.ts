@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { WorkerPool } from './worker/workerPoolWithTransaction';
+import { WorkerPoolOCC } from './worker/workerPoolwithOCC';
 
 /**
  * Octopus is a singleton key-value store with support for time-to-live (TTL) on keys.
@@ -33,7 +33,7 @@ import { WorkerPool } from './worker/workerPoolWithTransaction';
  */
 class Octopus extends EventEmitter {
     private static instance: Octopus;
-    private workerPool: WorkerPool;
+    private workerPool: WorkerPoolOCC;
     private maxWorkers: number;
     private static readonly defaultNumWorkers: number = 8;
 
@@ -47,7 +47,7 @@ class Octopus extends EventEmitter {
     private constructor(maxWorkers?: number) {
         super();
         this.maxWorkers = maxWorkers > 0 ? maxWorkers : Octopus.defaultNumWorkers;
-        this.workerPool = new WorkerPool(maxWorkers);
+        this.workerPool = new WorkerPoolOCC(maxWorkers);
     }
 
     /**
