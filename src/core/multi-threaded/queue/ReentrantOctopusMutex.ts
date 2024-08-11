@@ -19,9 +19,10 @@ import { workerData } from 'worker_threads';
 * - Thread Tracking: Maintain a record of the thread or process that currently holds the lock and how many times it has acquired the lock.
 * - Release on Last Unlock: The lock is only fully released when the thread that originally acquired it has released it as many times as it acquired it.
 **/
-export class OctupusReentrantMutex {
+export class ReentrantOctopusMutex {
     private queue: Array<() => void> = [];
-    private lockedBy: Map<number, number> = new Map(); // Map to track the number of acquisitions per thread
+    private locked = false;
+    private lockCount = new Map<number, number>(); // Tracks lock count per thread
     private currentOwner: number | null = null;
 
     /**
@@ -32,44 +33,50 @@ export class OctupusReentrantMutex {
         const currentThreadId = this.getCurrentThreadId();
 
         if (this.currentOwner === currentThreadId) {
-            // If the current thread already holds the lock, increment the count
-            this.lockedBy.set(currentThreadId, (this.lockedBy.get(currentThreadId) ?? 0) + 1);
+            // Increment lock count if the same thread already owns the lock
+            this.lockCount.set(currentThreadId, (this.lockCount.get(currentThreadId) ?? 0) + 1);
             return;
         }
 
-        await new Promise<void>(resolve => this.queue.push(resolve));
+        if (this.locked) {
+            // Queue the request if the lock is held by another thread
+            await new Promise<void>(resolve => this.queue.push(resolve));
+        }
 
-        // Ensure the current thread owns the lock
+        this.locked = true;
         this.currentOwner = currentThreadId;
-        this.lockedBy.set(currentThreadId, (this.lockedBy.get(currentThreadId) ?? 0) + 1);
+        this.lockCount.set(currentThreadId, (this.lockCount.get(currentThreadId) ?? 0) + 1);
     }
 
     /**
      * Releases the mutex lock. Only releases if the current thread has released all its acquisitions.
      * @returns {Promise<void>} A promise that resolves when the lock is released.
      */
-    async unlock(): Promise<void> {
+    unlock(): void {
         const currentThreadId = this.getCurrentThreadId();
 
         if (this.currentOwner !== currentThreadId) {
             throw new Error('Current thread does not own the lock');
         }
 
-        const currentCount = this.lockedBy.get(currentThreadId) ?? 0;
+        // Get the current lock count for the thread
+        const currentCount = this.lockCount.get(currentThreadId) ?? 0;
 
         if (currentCount > 1) {
-            // Decrement the count if more than one acquisition
-            this.lockedBy.set(currentThreadId, currentCount - 1);
+            // Decrement the lock count if the thread acquired it multiple times
+            this.lockCount.set(currentThreadId, currentCount - 1);
             return;
         }
 
-        // Fully release the lock
-        this.lockedBy.delete(currentThreadId);
+        // Release the lock if the thread has no more acquisitions
+        this.lockCount.delete(currentThreadId);
 
         if (this.queue.length > 0) {
-            // Resolve the next waiting promise
+            // Release the lock to the next waiting thread
             this.queue.shift()?.();
         } else {
+            // Reset the lock state if no threads are waiting
+            this.locked = false;
             this.currentOwner = null;
         }
     }

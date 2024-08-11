@@ -1,7 +1,7 @@
 import { Worker } from 'worker_threads';
 import { WorkerDataType, WorkerMetadata, WorkerState } from '../../../types/OctopusTypes';
 import { AdvancedTaskQueue } from '../queue/AdvancedTaskQueue';
-import { OctupusReentrantMutex } from '../queue/OctopusReentrantMutex';
+import { ReentrantOctopusMutex } from '../queue/ReentrantOctopusMutex';
 import path from 'path';
 
 /**
@@ -60,7 +60,7 @@ export class WorkerPool {
     private maxWorkers: number;
     // This implementation supports reentrant locking, ensuring that a thread can acquire the lock multiple times without causing deadlock.
     // Integrated into the WorkerPool to manage concurrency and avoid race conditions in worker state management and task processing.
-    private mutex = new OctupusReentrantMutex(); 
+    private mutex = new ReentrantOctopusMutex(); 
 
     /**
      * Creates an instance of the WorkerPool class.
@@ -125,40 +125,24 @@ export class WorkerPool {
         this.availableWorkers.add(workerId);
 
         worker.once('message', async () => {
-            console.debug('Worker initialized:', workerId);
-            await this.mutex.lock();
-            this.workerPoolMap.get(workerId).metadata.state = 'idle'; // Update state to idle
-            this.availableWorkers.add(workerId); // Return to available workers
-            this.processQueue(); // Process the next task
-            this.mutex.unlock();
-        });
-
-        worker.on('error', async (error) => {
-            console.error('Worker encountered an error:', error);
-            await this.mutex.lock();
-            this.markWorkerAsIdleOrReset(workerId);
-            this.processQueue();
-            this.mutex.unlock();
-        });
-
-        worker.on('exit', async (code) => {
-            if (code !== 0) {
-                console.error(`Worker stopped with exit code ${code}`);
-                await this.mutex.lock();
-                this.removeWorker(workerId);
-                // Add a new worker to the pool if the number of workers is less than the maximum
-                if (this.workerPoolMap.size < this.maxWorkers) {
-                    this.addWorkerToPool();
-                }
-                await this.processQueue();
-                this.mutex.unlock();
-            } else {
-                await this.mutex.lock();
-                this.markWorkerAsIdleOrReset(workerId);
-                await this.processQueue();
-                this.mutex.unlock();
+            console.debug(`f(addWorkerToPool) Worker ${worker.threadId} initialized:`, workerId);
+            try {
+                await this.mutex.lock(); // Lock acquisition
+                console.debug(`f(addWorkerToPool) : Lock acquired for worker: ${workerId}`);
+                this.workerPoolMap.get(workerId).metadata.state = 'idle'; // Update state to idle
+                this.availableWorkers.add(workerId); // Return to available workers
+                console.debug('f(addWorkerToPool) Worker returned to pool:', workerId);
+            } catch (error) {
+                console.error('Error during worker initialization:', error);
+            } finally {
+                console.debug('Releasing lock for worker:', workerId);
+                this.mutex.unlock(); // Ensure the lock is always released
             }
-        });
+            // Process the next task in the queue without holding the lock
+            this.processQueue();
+        });        
+        worker.on('error', async (error) => this.handleWorkerError(workerId, error));
+        worker.on('exit', async (code) => this.handleWorkerExit(workerId, code));
     }
 
     /**
@@ -251,41 +235,27 @@ export class WorkerPool {
     
                 // Listen for a message from the worker thread (successful result)
                 worker.once('message', async (message) => {
-                    console.debug('Worker message:', message);
-                    // Return the worker to the pool, as it is now idle
-                    await this.mutex.lock();
-                    this.addWorkerToPool(workerId, 'idle');
-                    this.processQueue(); // Process the next task in the queue
-                    this.mutex.unlock();
-                    resolve(message);
-                });
-    
-                worker.once('error', async (error) => {
-                    console.error('Worker encountered an error:', error);
-                    await this.mutex.lock();
-                    this.markWorkerAsIdleOrReset(workerId);
-                    this.processQueue();
-                    this.mutex.unlock();
-                    reject(error);
-                });
-    
-                worker.once('exit', async (code) => {
-                    if (code !== 0) {
-                        console.error(`Worker stopped with exit code ${code}`);
+                    console.debug(`Worker ${worker.threadId} success message:`, message);
+                    try {
                         await this.mutex.lock();
-                        this.removeWorker(workerId);
-                        if (this.workerPoolMap.size < this.maxWorkers) {
-                            this.addWorkerToPool();
-                        }
-                        await this.processQueue();
-                        this.mutex.unlock();
-                    } else {
-                        await this.mutex.lock();
-                        this.markWorkerAsIdleOrReset(workerId);
-                        await this.processQueue();
-                        this.mutex.unlock();
+                        console.debug(`Lock acquired for worker: ${workerId}`);
+
+                        this.addWorkerToPool(workerId, 'idle');
+                        console.debug('Worker returned to pool:', workerId);
+
+                        resolve(message); // Resolve the promise with the worker's message
+                    } catch (error) {
+                        console.error('Error acquiring lock:', error);
+                        reject(new Error(error)); // Reject if there's an issue acquiring the lock
+                    } finally {
+                        console.debug(`Releasing lock for worker: ${workerId}`);
+                        this.mutex.unlock(); // Ensure the lock is always released
                     }
+                    this.processQueue(); // Process next task in the queue
                 });
+                                  
+                worker.once('error', async (error) => this.handleWorkerError(workerId, error));
+                worker.once('exit', async (code) => this.handleWorkerExit(workerId, code));
             });
         } else {
             throw new Error('Worker not found');
@@ -312,5 +282,51 @@ export class WorkerPool {
                 }
             }
         }
+    }
+
+    /**
+     * Handles worker errors.
+     * 
+     * @param workerId  The unique identifier of the worker.
+     * @param error   The error encountered by the worker.
+     */
+    private handleWorkerError(workerId: number, error: Error) {
+        console.error('Worker encountered an error:', error);
+        this.mutex.lock().then(() => {
+            try {
+                this.markWorkerAsIdleOrReset(workerId);
+            } finally {
+                console.debug('Releasing lock for worker:', workerId);
+                this.mutex.unlock();
+            }
+            this.processQueue();  
+        });
+    }
+    
+    /**
+     * Handles worker exits.
+     * 
+     * @param workerId  The unique identifier of the worker.
+     * @param code   The exit code of the worker.
+     */
+    private handleWorkerExit(workerId: number, code: number) {
+        this.mutex.lock().then(() => {
+            console.debug('Lock acquired');
+            try {
+                if (code !== 0) {
+                    console.error(`Worker stopped with exit code ${code}`);
+                    this.removeWorker(workerId);
+                    if (this.workerPoolMap.size < this.maxWorkers) {
+                        this.addWorkerToPool();
+                    }
+                } else {
+                    this.markWorkerAsIdleOrReset(workerId);
+                }
+            } finally {
+                console.debug('Releasing lock for worker:', workerId);
+                this.mutex.unlock();
+            }
+            this.processQueue();
+        });
     }
 }

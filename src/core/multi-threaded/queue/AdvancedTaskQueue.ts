@@ -1,6 +1,6 @@
 import { AdvancedTask } from "../../../types/OctopusTypes";
 import { BinaryHeapPriorityQueue } from "./BinaryHeapPriorityQueue";
-import { OctupusReentrantMutex } from "./OctopusReentrantMutex";
+import { ReentrantOctopusMutex } from "./ReentrantOctopusMutex";
 
 /**
  * A queue that manages tasks with priorities and delayed execution.
@@ -37,7 +37,7 @@ export class AdvancedTaskQueue<T> {
      * @private
      * @type {OctopusMutex}
      */
-    private mutex = new OctupusReentrantMutex();
+    private mutex = new ReentrantOctopusMutex();
 
     /**
      * Interval (in milliseconds) at which the queue is polled for executing delayed tasks.

@@ -9,6 +9,18 @@ octopusDB.on('operation', (operationType, key, value) => {
 });
 
 (async () => {
-    const result = await octopusDB.sadd('myKey', 'myValue');
-    console.log(`Result of SADD operation: ${result}`);
+    await Promise.all([
+        (async () => {
+            const result = await octopusDB.sadd('myKey', 'myValue');
+            console.log(`Result of SADD operation: ${result}`);
+        })(),
+        (async () => {
+            const result = await octopusDB.sadd('anotherKey', 'anotherValue');
+            console.log(`Result of Another operation: ${result}`);
+        })(),
+        (async () => {
+            const result = await octopusDB.rpush('myList', 'myValue');
+            console.log(`Result of RPUSH operation: ${result}`);
+        })(),
+    ]);
 })();
