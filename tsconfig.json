@@ -21,15 +21,16 @@
       "verbatimModuleSyntax": true, // or `isolatedModules`
       "skipLibCheck": true,
       "forceConsistentCasingInFileNames": true
-    }
+    },
+    "experimentalResolver": true
   },
   // These options are passed to tsc.
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "target": "ES6",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "esModuleInterop": true,
     "noEmit": true, // or `emitDeclarationOnly`
     "allowImportingTsExtensions": true,

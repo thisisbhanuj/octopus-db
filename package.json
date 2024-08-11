@@ -6,11 +6,10 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "build": "tsc",
+    "build": "npx tsc",
     "use:tsc": "tsc src/usage/mt.ts && node src/usage/mt.js",
     "use:tsnode": "ts-node src/usage/mt.ts",
-    "test": "tsc src/tests/Octopus.test.ts",
-    "jest": "jest --watch"
+    "test": "jest"
   },
   "dependencies": {
     "@types/node": "^22.1.0",
