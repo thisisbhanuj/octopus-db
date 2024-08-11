@@ -2,53 +2,27 @@ import { Worker } from 'worker_threads';
 import { WorkerDataType, WorkerMetadata, WorkerState } from '../../../types/OctopusTypes';
 import { AdvancedTaskQueue } from '../queue/AdvancedTaskQueue';
 import path from 'path';
-import { TransactionManager } from '../transaction/impl/TransactionManager';
+import { OCCHandler } from '../occ/interfaces/OCCHandler';
 
 /**
  * WorkerPool manages a pool of worker threads and task queuing.
  * 
- * This class integrates `AdvancedTaskQueue` to efficiently manage worker threads and their tasks.
- * It handles worker lifecycle, task queuing, and task processing with support for priorities and delays.
- *
- * ### Key Integrations and Concepts:
- *
- * 1. **AdvancedTaskQueue Integration**:
- *    - Uses `AdvancedTaskQueue` for advanced task management with priorities and delays.
- *    - Handles asynchronous task dequeuing.
- *
- * 2. **Worker Pool Management**:
- *    - Uses a `Map` to manage workers with their states.
- *    - Tracks available workers with a `Set`.
- *    - Manages worker states (`idle`, `busy`, `terminated`).
- *
- * 3. **Task Execution**:
- *    - The `runWorker` method executes tasks, considering priority and delay.
- *    - Handles worker errors and exits to maintain stability.
- *
- * 4. **Queue Processing**:
- *    - `processQueue` picks and assigns tasks to available workers based on priority and delay.
- *
- * ### Integration Process
- *
- * 1. **Initialization**:
- *    - Instantiates worker threads up to `maxWorkers`.
- *
- * 2. **Task Enqueuing**:
- *    - Enqueues tasks if no workers are available, based on priority and delay.
- *
- * 3. **Task Dequeuing and Execution**:
- *    - Processes tasks when workers are available.
- *
- * 4. **Worker State Management**:
- *    - Updates worker states and manages errors and exits.
+ * - Worker Management:
+ * 1. Initialization: Creates and initializes worker threads up to a specified maximum (maxWorkers).
+ * 2. Lifecycle Management: Adds, removes, and manages worker states (idle, busy, terminated).
+ * - Task Handling:
+ * 1. Task Queuing: Uses AdvancedTaskQueue to handle tasks with priorities and delays.
+ * 2. Task Execution: Executes tasks by assigning them to available workers, considering their current state.
+ * - Concurrency Control: OCC Integration: Uses OCCHandler to manage optimistic concurrency control, ensuring data consistency during task execution.
+ * - Error Handling: Worker Errors: Handles worker errors and exits, re-adding workers if needed.
+ * - Queue Processing: Automatic Task Assignment: Processes tasks from the queue when workers become available.
  *
  * ### Benefits
- *
  * - **Scalability**: Efficiently handles a large number of tasks and workers.
  * - **Resilience**: Gracefully handles worker failures.
  * - **Flexibility**: Supports advanced queuing features for various use cases.
  **/
-export class WorkerPool {
+export class WorkerPoolOCC {
     // Why Map?
     // Tracking: Easily track and manage workers by their unique identifiers.
     // State Management: You can track worker states (active, idle, etc.) or additional metadata.
@@ -58,8 +32,7 @@ export class WorkerPool {
     private taskQueue: AdvancedTaskQueue<WorkerDataType>; // Replaces the simple array-based queue with AdvancedTaskQueue, allowing tasks to be enqueued with priorities and delays.
     private workerIdCounter: number = 0;
     private maxWorkers: number;
-    // Transactions are used for handling worker states and managing errors, ensuring operations are atomic and consistent.
-    private transactionManager: TransactionManager;
+    private occHandler: OCCHandler<WorkerMetadata>;
 
     /**
      * Creates an instance of the WorkerPool class.
@@ -73,8 +46,21 @@ export class WorkerPool {
     constructor(maxWorkers: number) {
         this.maxWorkers = maxWorkers;
         this.taskQueue = new AdvancedTaskQueue<WorkerDataType>();
-        this.transactionManager = new TransactionManager();
+        this.occHandler = new OCCHandler<WorkerMetadata>(this.getWorkerMetadata.bind(this)); // The OCCHandler is initialized with a function that retrieves the metadata of a worker based on its unique identifier.
         this.initializeWorkerPool();
+    }
+
+    /**
+     * Retrieves the metadata of a worker based on its unique identifier.
+     * 
+     * @private
+     * @param {number} id The unique identifier of the worker.
+     * @returns {WorkerMetadata} The metadata of the worker.
+     * @memberof WorkerPool
+     */
+    private getWorkerMetadata(id: number): WorkerMetadata {
+        const workerEntry = this.workerPoolMap.get(id);
+        return workerEntry ? workerEntry.metadata : null;
     }
 
     /**
@@ -126,20 +112,15 @@ export class WorkerPool {
 
         worker.once('message', async () => {
             console.debug(`f(addWorkerToPool) Worker ${worker.threadId} initialized:`, workerId);
-            const transaction = this.transactionManager.startTransaction();
             try {
-                transaction.addOperation(async () => {
-                    this.workerPoolMap.get(workerId).metadata.state = 'idle';// Update state to idle
-                    this.availableWorkers.add(workerId); // Return to available workers
-                });
+                this.workerPoolMap.get(workerId).metadata.state = 'idle';// Update state to idle
+                this.availableWorkers.add(workerId); // Return to available workers
             } catch (error) {
                 console.error('Error during worker initialization:', error);
-                this.transactionManager.rollbackTransaction(transaction.getId());
             } finally {
-                this.transactionManager.endTransaction(transaction.getId());
+                // Process the next task in the queue without holding the lock
+                this.processQueue();
             }
-            // Process the next task in the queue without holding the lock
-            this.processQueue();
         });        
         worker.on('error', async (error) => this.handleWorkerError(workerId, error));
         worker.on('exit', async (code) => this.handleWorkerExit(workerId, code));
@@ -225,39 +206,45 @@ export class WorkerPool {
             if (!workerEntry || workerEntry.metadata.state === 'terminated') {
                 throw new Error('Worker not found');
             }
-        
-            const worker = workerEntry.worker;
-            workerEntry.metadata.state = 'busy'; // Update the worker state to busy
-            this.availableWorkers.delete(workerId); // Remove the worker from the available workers set
 
-            return new Promise((resolve, reject) => {
-                // The main thread sends messages to the worker using worker.postMessage(data). 
-                // This establishes a communication channel between the main thread and the worker.
-                worker.postMessage(data);
-    
-                // Listen for a message from the worker thread (successful result)
-                worker.once('message', async (message) => {
-                    console.debug(`Worker ${worker.threadId} success message:`, message);
-                    const transaction = this.transactionManager.startTransaction();
-                    try {
-                        transaction.addOperation(async () => {
+            const currentVersion = workerEntry.metadata.version;
+
+            try{
+                // Perform the operation using optimistic concurrency control
+                await this.occHandler.performOperation(workerId, currentVersion, async (metadata) => {
+                    // Perform task execution
+                    const worker = workerEntry.worker;
+                    metadata.state = 'busy'; // Update the worker state to busy
+                    this.availableWorkers.delete(workerId); // Remove the worker from the available workers set
+
+                    // Send the data to the worker thread
+                    worker.postMessage(data);
+
+                    return new Promise((resolve, reject) => {
+                        // Handle the response from the worker thread
+                        worker.once('message', (message) => {
+                            console.debug(`Worker ${workerId} result : ${message}`);
                             this.addWorkerToPool(workerId, 'idle'); // Add the worker back to the pool
                             this.availableWorkers.add(workerId); // Return to available workers
+                            resolve(message);
                         });
-                    } catch (error) {
-                        console.error('Error during worker operation:', error);
-                        this.transactionManager.rollbackTransaction(transaction.getId());
-                        reject(new Error(error));
-                    } finally {
-                        resolve(message);
-                        this.transactionManager.endTransaction(transaction.getId());
-                    }
-                    this.processQueue(); // Process next task in the queue
+                        // Handle errors and exits
+                        worker.once('error', (error) => {
+                            this.handleWorkerError(workerId, error);
+                            reject(error);
+                        });
+                        worker.once('exit', (code) => {
+                            this.handleWorkerExit(workerId, code);
+                            reject(new Error('Worker exited unexpectedly'));
+                        });
+                    });
                 });
-                                  
-                worker.once('error', async (error) => this.handleWorkerError(workerId, error));
-                worker.once('exit', async (code) => this.handleWorkerExit(workerId, code));
-            });
+            } catch (error) {
+                console.error('OCC failed:', error);
+                throw new Error(error);
+            } finally {
+                this.processQueue();
+            }
         } else {
             throw new Error('Worker not found');
         }
@@ -293,19 +280,13 @@ export class WorkerPool {
      */
     private handleWorkerError(workerId: number, error: Error) {
         console.error('Worker encountered an error:', error);
-        const transaction = this.transactionManager.startTransaction();
         try {
-            transaction.addOperation(async () => {
-                this.removeWorker(workerId);
+            this.removeWorker(workerId);
                 if (this.workerPoolMap.size < this.maxWorkers) {
                     this.addWorkerToPool();
-                }
-            });   
+                }  
         } catch (error) {
             console.error('Error during worker error handling:', error);
-            this.transactionManager.rollbackTransaction(transaction.getId());
-        } finally {
-            this.transactionManager.endTransaction(transaction.getId());
         }
         this.processQueue();  
     }
@@ -317,25 +298,17 @@ export class WorkerPool {
      * @param code   The exit code of the worker.
      */
     private handleWorkerExit(workerId: number, code: number) {
-        const transaction = this.transactionManager.startTransaction();
         try {
             if (code !== 0) {
-                transaction.addOperation(async () => {
-                    this.removeWorker(workerId);
+                this.removeWorker(workerId);
                     if (this.workerPoolMap.size < this.maxWorkers) {
                         this.addWorkerToPool();
                     }
-                });
             } else {
-                transaction.addOperation(async () => {
-                    this.markWorkerAsIdleOrReset(workerId);
-                });
+                this.markWorkerAsIdleOrReset(workerId);
             }
         } catch (error) {
             console.error('Error during worker exit handling:', error);
-            this.transactionManager.rollbackTransaction(transaction.getId());
-        } finally {
-            this.transactionManager.endTransaction(transaction.getId());
         }
            
         this.processQueue();
