@@ -2,6 +2,7 @@ import { Worker } from 'worker_threads';
 import { WorkerDataType, WorkerMetadata, WorkerState } from '../../../types/OctopusTypes';
 import { AdvancedTaskQueue } from '../queue/AdvancedTaskQueue';
 import { OctupusReentrantMutex } from '../queue/OctopusReentrantMutex';
+import path from 'path';
 
 /**
  * WorkerPool manages a pool of worker threads and task queuing.
@@ -105,7 +106,8 @@ export class WorkerPool {
      * @returns {void}
      */
     private addWorkerToPool(workerId: number = this.workerIdCounter++, state: keyof WorkerState = 'idle'): void {
-        const worker = new Worker(__filename.replace('workerPool', 'worker'), {
+        const workerPath = path.resolve(__dirname, 'worker.js');
+        const worker = new Worker(workerPath, {
             workerData: { c_threadId: workerId } // Passes the workerId to the worker data as c_threadId
         });
         this.workerPoolMap.set(workerId, {
@@ -115,6 +117,7 @@ export class WorkerPool {
         this.availableWorkers.add(workerId);
 
         worker.once('message', async () => {
+            console.debug('Worker initialized:', workerId);
             await this.mutex.lock();
             this.workerPoolMap.get(workerId).metadata.state = 'idle'; // Update state to idle
             this.availableWorkers.add(workerId); // Return to available workers
@@ -180,6 +183,7 @@ export class WorkerPool {
      * @returns {void}
      */
     private removeWorker(workerId: number): void {
+        console.debug('Removing worker:', workerId);
         this.workerPoolMap.delete(workerId);
         this.availableWorkers.delete(workerId);
     }
@@ -205,69 +209,79 @@ export class WorkerPool {
      */
     async runWorker(data: WorkerDataType, priority: number = 0, delay: number = 0): Promise<any> {
         if(this.availableWorkers.size === 0) {
+            console.debug('No available workers. Enqueuing task: ', data);
             return new Promise((resolve, reject) => {
                 this.taskQueue.enqueue(data, priority, delay).then(() => {
                     this.processQueue();
                 });
             });
         }
-
         const workerId = Array.from(this.availableWorkers.values()).shift();
-        if (!workerId) {
-            throw new Error('No available worker');
-        }
 
-        const workerEntry = this.workerPoolMap.get(workerId);
-        if (!workerEntry || workerEntry.metadata.state === 'terminated') {
-            throw new Error('Worker not found');
-        }
+        console.debug('*****************************************************')
+        console.debug('Available workers:', this.availableWorkers);
+        console.debug('Worker ID:', workerId);
+        console.debug('Running worker with data:', data);
+        console.debug('Priority:', priority);
+        console.debug('Delay:', delay);
+        console.debug('*****************************************************')
+
+        if (this.workerPoolMap.has(workerId)) {
+            const workerEntry = this.workerPoolMap.get(workerId);
+            if (!workerEntry || workerEntry.metadata.state === 'terminated') {
+                throw new Error('Worker not found');
+            }
+        
+            const worker = workerEntry.worker;
+            workerEntry.metadata.state = 'busy'; // Update the worker state to busy
+            this.availableWorkers.delete(workerId); // Remove the worker from the available workers set
     
-        const worker = workerEntry.worker;
-        workerEntry.metadata.state = 'busy'; // Update the worker state to busy
-        this.availableWorkers.delete(workerId); // Remove the worker from the available workers set
-
-        return new Promise((resolve, reject) => {
-            // The main thread sends messages to the worker using worker.postMessage(data). 
-            // This establishes a communication channel between the main thread and the worker.
-            worker.postMessage(data);
-
-            // Listen for a message from the worker thread (successful result)
-            worker.once('message', async (message) => {
-                // Return the worker to the pool, as it is now idle
-                await this.mutex.lock();
-                this.addWorkerToPool(workerId, 'idle');
-                this.processQueue(); // Process the next task in the queue
-                this.mutex.unlock();
-                resolve(message);
-            });
-
-            worker.once('error', async (error) => {
-                console.error('Worker encountered an error:', error);
-                await this.mutex.lock();
-                this.markWorkerAsIdleOrReset(workerId);
-                this.processQueue();
-                this.mutex.unlock();
-                reject(error);
-            });
-
-            worker.once('exit', async (code) => {
-                if (code !== 0) {
-                    console.error(`Worker stopped with exit code ${code}`);
+            return new Promise((resolve, reject) => {
+                // The main thread sends messages to the worker using worker.postMessage(data). 
+                // This establishes a communication channel between the main thread and the worker.
+                worker.postMessage(data);
+    
+                // Listen for a message from the worker thread (successful result)
+                worker.once('message', async (message) => {
+                    console.debug('Worker message:', message);
+                    // Return the worker to the pool, as it is now idle
                     await this.mutex.lock();
-                    this.removeWorker(workerId);
-                    if (this.workerPoolMap.size < this.maxWorkers) {
-                        this.addWorkerToPool();
-                    }
-                    await this.processQueue();
+                    this.addWorkerToPool(workerId, 'idle');
+                    this.processQueue(); // Process the next task in the queue
                     this.mutex.unlock();
-                } else {
+                    resolve(message);
+                });
+    
+                worker.once('error', async (error) => {
+                    console.error('Worker encountered an error:', error);
                     await this.mutex.lock();
                     this.markWorkerAsIdleOrReset(workerId);
-                    await this.processQueue();
+                    this.processQueue();
                     this.mutex.unlock();
-                }
+                    reject(error);
+                });
+    
+                worker.once('exit', async (code) => {
+                    if (code !== 0) {
+                        console.error(`Worker stopped with exit code ${code}`);
+                        await this.mutex.lock();
+                        this.removeWorker(workerId);
+                        if (this.workerPoolMap.size < this.maxWorkers) {
+                            this.addWorkerToPool();
+                        }
+                        await this.processQueue();
+                        this.mutex.unlock();
+                    } else {
+                        await this.mutex.lock();
+                        this.markWorkerAsIdleOrReset(workerId);
+                        await this.processQueue();
+                        this.mutex.unlock();
+                    }
+                });
             });
-        });
+        } else {
+            throw new Error('Worker not found');
+        }
     }
 
     /**
@@ -278,12 +292,14 @@ export class WorkerPool {
      * @returns {void}
      */
     private async processQueue(): Promise<void> {
+        console.debug('Processing queue...');
         if (this.taskQueue.size() > 0 && this.availableWorkers.size > 0) {
             const task = await this.taskQueue.dequeue();
             if (task) {
                 const workerId = Array.from(this.availableWorkers.values()).shift();
                 const workerEntry = workerId ? this.workerPoolMap.get(workerId) : undefined;
                 if (workerEntry && workerEntry.metadata.state === 'idle') {
+                    console.debug('Processing task from queue: ', task);
                     this.runWorker(task);
                 }
             }
