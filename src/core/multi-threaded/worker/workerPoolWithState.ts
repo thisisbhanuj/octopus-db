@@ -106,6 +106,14 @@ export class WorkerPool {
      * @returns {void}
      */
     private addWorkerToPool(workerId: number = this.workerIdCounter++, state: keyof WorkerState = 'idle'): void {
+        // **********************************************************
+        // Construct the path to the worker script, which will be executed in a separate thread.
+        // Had issue with the __filename.replace('workerPool', 'worker') typescipt loading,
+        // so convertte .ts to .js and used path.resolve to get the worker.js path.
+        // ERROR : import { isMainThread, parentPort } from 'worker_threads';
+        // ^^^^^^
+        // SyntaxError: Cannot use import statement outside a module
+        // **********************************************************
         const workerPath = path.resolve(__dirname, 'worker.js');
         const worker = new Worker(workerPath, {
             workerData: { c_threadId: workerId } // Passes the workerId to the worker data as c_threadId
