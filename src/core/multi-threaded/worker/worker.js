@@ -1,5 +1,4 @@
-import { isMainThread, parentPort } from 'worker_threads';
-import { WorkerDataType } from '../../../types/OctopusTypes';
+const { Worker, isMainThread, parentPort } = require('worker_threads');
 
 // ******************************************************************************************************** //
 //                                          Message Handling
@@ -10,10 +9,10 @@ import { WorkerDataType } from '../../../types/OctopusTypes';
 if (!isMainThread) {
     //  In-Memory Store (store): A Map is used to store key-value pairs. 
     //  The value can be a string, number, list (array), or set depending on the operation.
-    const store: Map<string, any> = new Map();
+    const store = new Map();
     //  TTL Management (ttlStore): A separate Map is used to manage time-to-live (TTL) for keys.
     //  When a key is set to expire, a timeout is set to remove it after the specified seconds.
-    const ttlStore: Map<string, NodeJS.Timeout> = new Map();
+    const ttlStore = new Map();
 
     //  The worker thread is listening for messages via parentPort.on('message', ...). 
     //  The parentPort represents the communication channel between the main thread and this worker thread.
@@ -22,8 +21,8 @@ if (!isMainThread) {
     //  It's used to handle incoming messages from the main thread to the worker thread.
     //  When you write parentPort!.on('message', ...), you're telling the worker to listen for messages sent from the main thread.
     try{
-        parentPort.on('message', (data: WorkerDataType) => {
-            let result: any;
+        parentPort.on('message', (data) => {
+            let result;
     
             switch (data.type) {
                 case 'set':
@@ -90,7 +89,7 @@ if (!isMainThread) {
     
                 case 'ttl':
                     if (ttlStore.has(data.key)) {
-                        const remainingTime = Math.ceil((ttlStore.get(data.key) as any)._idleTimeout / 1000);
+                        const remainingTime = Math.ceil((ttlStore.get(data.key))._idleTimeout / 1000);
                         result = remainingTime;
                     } else {
                         result = -1;
@@ -104,7 +103,7 @@ if (!isMainThread) {
                                 store.set(data.key, []);
                             }
                             store.get(data.key).unshift(data.value);
-                            result = store.get(data.key).length;
+                            result = store.get(data.key).length || 0;
                             break;
     
                         case 'RPUSH':
@@ -112,12 +111,12 @@ if (!isMainThread) {
                                 store.set(data.key, []);
                             }
                             store.get(data.key).push(data.value);
-                            result = store.get(data.key).length;
+                            result = store.get(data.key).length || 0;
                             break;
     
                         case 'LPOP':
                             if (store.has(data.key) && Array.isArray(store.get(data.key))) {
-                                result = store.get(data.key).shift()!;
+                                result = store.get(data.key).shift() || null;
                             } else {
                                 result = null;
                             }
@@ -125,7 +124,7 @@ if (!isMainThread) {
     
                         case 'RPOP':
                             if (store.has(data.key) && Array.isArray(store.get(data.key))) {
-                                result = store.get(data.key).pop()!;
+                                result = store.get(data.key).pop() || null;
                             } else {
                                 result = null;
                             }
@@ -139,7 +138,7 @@ if (!isMainThread) {
                             if (!store.has(data.key)) {
                                 store.set(data.key, new Set());
                             }
-                            result = store.get(data.key).add(data.value).size;
+                            result = store.get(data.key).add(data.value) ? 1 : 0;
                             break;
     
                         case 'SREM':
@@ -152,7 +151,7 @@ if (!isMainThread) {
     
                         case 'SMEMBERS':
                             if (store.has(data.key) && store.get(data.key) instanceof Set) {
-                                result = Array.from(store.get(data.key));
+                                result = Array.from(store.get(data.key)) || [];
                             } else {
                                 result = [];
                             }

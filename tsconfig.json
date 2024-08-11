@@ -21,8 +21,7 @@
       "verbatimModuleSyntax": true, // or `isolatedModules`
       "skipLibCheck": true,
       "forceConsistentCasingInFileNames": true
-    },
-    "experimentalResolver": true
+    }
   },
   // These options are passed to tsc.
   "compilerOptions": {
